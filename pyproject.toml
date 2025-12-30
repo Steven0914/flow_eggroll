@@ -1,0 +1,27 @@
+[project]
+name = "main"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "absl-py>=2.3.1",
+    "accelerate>=1.12.0",
+    "diffusers>=0.36.0",
+    "ftfy>=6.3.1",
+    "ml-collections>=1.1.0",
+    "numpy<2.0",
+    "opencv-python>=4.11.0.86",
+    "paddleocr==2.9.1",
+    "paddlepaddle-gpu==2.6.2",
+    "peft>=0.18.0",
+    "pillow>=12.0.0",
+    "pydantic>=2.12.5",
+    "python-levenshtein>=0.27.3",
+    "sentencepiece>=0.2.0",
+    "setuptools>=80.9.0",
+    "torch>=2.9.1",
+    "torchvision>=0.24.1",
+    "tqdm>=4.67.1",
+    "wandb>=0.23.1",
+]
