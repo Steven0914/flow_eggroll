@@ -1,1 +1,1 @@
-PYTHONPATH=. accelerate launch --config_file flow_grpo/scripts/accelerate_configs/multi_gpu.yaml --num_processes=2 src/train_sd3.py --config src/config/grpo.py:general_ocr_sd3_2gpu
+PYTHONPATH=. accelerate launch --config_file flow_grpo/scripts/accelerate_configs/multi_gpu.yaml --num_processes=2 src/train_sd3.py --config src/config/config.py:general_ocr_sd3_2gpu
