@@ -115,7 +115,7 @@ def train_sd3_eggroll(config) -> None:
         target_modules=target_modules,
         sigma=sigma,
         lr=lr,
-        group_size=0,
+        group_size=2, # Set group_size=2 for Pairwise Normalization (Antithetic Sampling)
         noise_reuse=noise_reuse,
         rank=lora_rank
     )
@@ -171,6 +171,11 @@ def train_sd3_eggroll(config) -> None:
     num_epochs = getattr(config, "num_epochs", 1)
     batches_per_epoch = config.sample.num_batches_per_epoch
     population_size = batches_per_epoch * config.sample.train_batch_size
+    
+    # Ensure population size is even for antithetic sampling
+    if population_size % 2 != 0:
+        population_size += 1
+        print(f"Adjusted population size to {population_size} to be even for antithetic sampling.")
 
     global_step = 0
     for epoch in range(num_epochs):
@@ -200,54 +205,79 @@ def train_sd3_eggroll(config) -> None:
                 if current_pop_processed >= population_size:
                     break
                 
-                # Correct sample index for noise generation
-                # In original code: sample_idx tracked total samples in epoch
-                global_sample_idx = sample_idx + accelerator.process_index * population_size
-                iterinfo = torch.tensor([epoch, global_sample_idx], device=device, dtype=torch.int32)
+                # Check if we have space for the pair
+                if sample_idx + 1 >= population_size:
+                    break
+
+                # Generate a shared seed for this prompt pair
+                # We use a large random integer derived from system time or random generator
+                # to ensure randomness across epochs and steps.
+                current_seed = random.randint(0, 2**32 - 1)
                 
-                # 1. Perturb parameters (Apply Noise)
-                eggroll.perturb(iterinfo)
+                # We perform Antithetic Sampling: 2 samples per prompt
+                # 1. Positive (+Sigma) -> Even ID
+                # 2. Negative (-Sigma) -> Odd ID
                 
-                # 2. Inference
-                with torch.no_grad():
-                    images = pipeline(
-                        prompt=[prompt],
-                        num_inference_steps=config.sample.num_steps,
-                        guidance_scale=config.sample.guidance_scale,
-                        height=config.resolution,
-                        width=config.resolution,
-                        output_type="pt",
-                    ).images
-
-                # 3. Unperturb parameters (Restore Base Weights)
-                eggroll.unperturb(iterinfo)
-
-                # 4. Compute Reward
-                rewards = reward_fn(images, [prompt], [metadatas[local_idx]], only_strict=True)
-
-                # Handle tuple rewards
-                if isinstance(rewards, tuple):
-                    rewards = rewards[0]
-
+                # Base global index for this process
+                # Ensure global offset maintains even/odd parity for multiple GPUs?
+                # accelerator.process_index * population_size assumes population_size is even (guaranteed above)
+                global_sample_base = sample_idx + accelerator.process_index * population_size
                 
-                if "avg" in rewards:
-                    fitness_value = float(rewards["avg"][0])
-                else:
-                    key = list(rewards.keys())[0]
-                    fitness_value = float(rewards[key][0])
+                # === Loop for Pair (Positive, Negative) ===
+                for i in range(2):
+                    current_local_idx = sample_idx + i
+                    current_global_idx = global_sample_base + i
+                    
+                    # iterinfo: [epoch, thread_id]
+                    iterinfo = torch.tensor([epoch, current_global_idx], device=device, dtype=torch.int32)
+                    
+                    # 1. Perturb parameters
+                    eggroll.perturb(iterinfo)
+                    
+                    # 2. Inference
+                    # CRITICAL: Use SAME generator for both positive and negative to ensure
+                    # geometric consistency (start from same latent noise).
+                    # We pass 'generator' to pipeline.
+                    generator = torch.Generator(device=device).manual_seed(current_seed)
+                    
+                    with torch.no_grad():
+                        images = pipeline(
+                            prompt=[prompt],
+                            num_inference_steps=config.sample.num_steps,
+                            guidance_scale=config.sample.guidance_scale,
+                            height=config.resolution,
+                            width=config.resolution,
+                            output_type="pt",
+                            generator=generator # Enforce fixed seed
+                        ).images
 
-                fitnesses[sample_idx] = fitness_value
-                iterinfos[sample_idx] = iterinfo
+                    # 3. Unperturb parameters
+                    eggroll.unperturb(iterinfo)
 
-                if accelerator.is_main_process:
-                    # Store sample for logging (cpu move to save gpu mem)
-                    # Use clone to ensure it persists safely if tensor memory is reused/freed
-                    # Store tuple: (Image Tensor, Prompt String, Reward Score)
-                    last_train_sample = (images[0].detach().cpu().clone(), prompts[0], fitness_value)
+                    # 4. Compute Reward
+                    rewards = reward_fn(images, [prompt], [metadatas[local_idx]], only_strict=True)
 
-                sample_idx += 1
-                current_pop_processed += 1
-                pbar.update(1)
+                    # Handle tuple rewards
+                    if isinstance(rewards, tuple):
+                        rewards = rewards[0]
+
+                    if "avg" in rewards:
+                        fitness_value = float(rewards["avg"][0])
+                    else:
+                        key = list(rewards.keys())[0]
+                        fitness_value = float(rewards[key][0])
+
+                    fitnesses[current_local_idx] = fitness_value
+                    iterinfos[current_local_idx] = iterinfo
+
+                    if accelerator.is_main_process and i == 0:
+                        # Log the first of the pair
+                        last_train_sample = (images[0].detach().cpu().clone(), prompts[0], fitness_value)
+
+                # Increment counters by 2 (Pair processed)
+                sample_idx += 2
+                current_pop_processed += 2
+                pbar.update(2)
 
         pbar.close()
 
