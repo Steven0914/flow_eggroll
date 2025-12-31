@@ -24,6 +24,10 @@ def compressibility():
     # rewards
     config.reward_fn = {"jpeg_compressibility": 1}
     config.per_prompt_stat_tracking = True
+    
+    # eggroll
+    # config.eggroll_sigma = 1e-3 # default
+    config.eggroll_sigma = 1e-4
     return config
 
 
@@ -54,8 +58,10 @@ def pickscore_sd3_2gpu():
     config.sample.global_std = True
     config.sample.same_latent = False
     config.train.ema = True
-    config.save_freq = 60 # epoch
-    config.eval_freq = 60
+    config.train.weight_decay = 1e-4
+
+    config.save_freq = 10 # epoch
+    config.eval_freq = 5
     config.save_dir = 'logs/pickscore/sd3.5-M'
     config.reward_fn = {
         "pickscore": 1.0,
@@ -97,9 +103,11 @@ def general_ocr_sd3_2gpu():
     config.sample.global_std = True
     config.sample.same_latent = False
     config.train.ema = True
+    config.train.weight_decay = 1e-4
+
     # A large num_epochs is intentionally set here. Training will be manually stopped once sufficient
     config.save_freq = 10 # epoch
-    config.eval_freq = 10
+    config.eval_freq = 5
     config.save_dir = 'logs/ocr/sd3.5-M'
     config.reward_fn = {
         "ocr": 1.0,
@@ -142,8 +150,10 @@ def general_ocr_sd3_1gpu():
     config.sample.global_std = True
     config.sample.same_latent = False
     config.train.ema = True
-    config.save_freq = 60 # epoch
-    config.eval_freq = 60
+    config.train.weight_decay = 1e-4
+
+    config.save_freq = 10 # epoch
+    config.eval_freq = 5
     config.save_dir = 'logs/ocr/sd3.5-M'
     config.reward_fn = {
         "ocr": 1.0,
@@ -185,6 +195,8 @@ def general_ocr_sd3_2gpu_test():
     config.sample.global_std = True
     config.sample.same_latent = False
     config.train.ema = True
+    config.train.weight_decay = 1e-4
+
     # A large num_epochs is intentionally set here. Training will be manually stopped once sufficient
     config.save_freq = 10 # epoch
     config.eval_freq = 10

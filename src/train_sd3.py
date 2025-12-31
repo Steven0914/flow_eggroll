@@ -72,6 +72,21 @@ def train_sd3_eggroll(config) -> None:
             config=config.to_dict(),
         )
     accelerator.wait_for_everyone()
+
+    # Print Key Configs
+    if accelerator.is_main_process:
+        print("="*40)
+        print("       EggRoll Concept Training")
+        print("="*40)
+        print(f"EggRoll Sigma: {getattr(config, 'eggroll_sigma', 1e-3)}")
+        print(f"Learning Rate: {getattr(config.train, 'learning_rate', 1e-4)}")
+        print(f"Weight Decay : {getattr(config.train, 'weight_decay', 1e-4)}")
+        print(f"EggRoll Rank : {getattr(config, 'eggroll_rank', 4)}")
+        
+        batches_per_epoch = config.sample.num_batches_per_epoch
+        population_size = batches_per_epoch * config.sample.train_batch_size
+        print(f"Population/Epoch : {population_size} (Batches: {batches_per_epoch} x BS: {config.sample.train_batch_size})")
+        print("="*40)
     
     # Reproducibility
     set_seed(getattr(config, "seed", 42), device_specific=True)
@@ -107,6 +122,7 @@ def train_sd3_eggroll(config) -> None:
     sigma = getattr(config, "eggroll_sigma", 1e-3)
     lr = getattr(config.train, "learning_rate", 1e-4)
     noise_reuse = getattr(config, "eggroll_noise_reuse", 1)
+    weight_decay = getattr(config.train, "weight_decay", 1e-4)
     
     # Initialize EggRoll (This replaces Linear layers with EggrollLinear)
     # Note: We pass the transformer model directly
@@ -117,7 +133,8 @@ def train_sd3_eggroll(config) -> None:
         lr=lr,
         group_size=2, # Set group_size=2 for Pairwise Normalization (Antithetic Sampling)
         noise_reuse=noise_reuse,
-        rank=lora_rank
+        rank=lora_rank,
+        weight_decay=weight_decay
     )
 
     # Collect trainable parameters (The weights of the replaced modules)
@@ -281,21 +298,6 @@ def train_sd3_eggroll(config) -> None:
 
         pbar.close()
 
-        # Log training sample images every N epochs
-        # if config.use_wandb and accelerator.is_main_process and (epoch + 1) % 1 == 0:
-        #     if last_train_sample is not None:
-        #         # Unpack safely
-        #         img_tensor, p_text, r_score = last_train_sample
-                
-        #         # Cast to float32 before numpy conversion (it is already on cpu, but just to be safe with types)
-        #         pil = Image.fromarray(
-        #             (img_tensor.float().numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
-        #         )
-        #         pil = pil.resize((config.resolution, config.resolution))
-                
-        #         wandb.log({
-        #             "images": [wandb.Image(pil, caption=f"Epoch {epoch} | {p_text[:100]} | Score: {r_score:.2f}")]
-        #         }, step=epoch)
 
         # 5. Optimization Step
         # Gather all fitnesses and iterinfos from all GPUs
@@ -304,10 +306,21 @@ def train_sd3_eggroll(config) -> None:
         
         # Log training metrics
         if config.use_wandb and accelerator.is_main_process:
+             # 1. 평균 점수
              mean_fitness = all_fitnesses.mean().item()
+             
+             # 2. 점수의 표준편차 (노이즈의 영향력 측정)
+             # 이 값이 0에 가까우면 Sigma가 너무 작거나, 프롬프트가 너무 쉬운 것임.
+             std_fitness = all_fitnesses.std().item()
+             
+             # 3. 최대/최소 점수 차이 (Max-Min Spread)
+             spread_fitness = (all_fitnesses.max() - all_fitnesses.min()).item()
+
              wandb.log({
+                 "train/reward_avg": mean_fitness,
+                 "train/reward_std": std_fitness,     # 핵심 지표
+                 "train/reward_spread": spread_fitness,
                  "epoch": epoch,
-                 "reward_avg": mean_fitness, # Logging avg reward
              }, step=epoch)
 
         eggroll.step(all_fitnesses, all_iterinfos) # Updates base weights via standard optimizer inside
@@ -420,7 +433,7 @@ def train_sd3_eggroll(config) -> None:
                                             r_str += f"{r_k}: {val_scalar:.2f} "
                                    
                                    # Pass PIL image directly to wandb to avoid file path issues with tempdirs
-                                   eval_images_log.append(wandb.Image(pil, caption=f"{current_prompt[:50]}... | {r_str}"))
+                                   eval_images_log.append(wandb.Image(pil, caption=f"{current_prompt[:100]}... | {r_str}"))
 
                  # Explicitly delete tensors to free memory
                  del images
