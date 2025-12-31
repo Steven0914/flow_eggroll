@@ -27,7 +27,7 @@ def compressibility():
     
     # eggroll
     # config.eggroll_sigma = 1e-3 # default
-    config.eggroll_sigma = 1e-4
+    config.eggroll_sigma = 1e-8
     return config
 
 

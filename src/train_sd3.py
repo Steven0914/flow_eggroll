@@ -104,6 +104,8 @@ def train_sd3_eggroll(config) -> None:
 
     pipeline.to(device)
     pipeline.safety_checker = None
+    
+    pipeline.set_progress_bar_config(disable=True)
 
     # Setup EggRoll with Implicit Low-Rank Perturbation
     lora_rank = getattr(config, "eggroll_rank", 4)
@@ -208,7 +210,8 @@ def train_sd3_eggroll(config) -> None:
         current_pop_processed = 0
         
         # Use tqdm for progress tracking
-        pbar = tqdm(total=population_size, desc=f"Epoch {epoch} Sampling", disable=not accelerator.is_main_process)
+        # We process 2 samples per iteration (Antithetic), so total steps = population_size
+        pbar = tqdm(total=population_size, desc=f"Epoch {epoch} Progress", unit="img", disable=not accelerator.is_main_process)
         
         while current_pop_processed < population_size:
             try:
@@ -294,7 +297,11 @@ def train_sd3_eggroll(config) -> None:
                 # Increment counters by 2 (Pair processed)
                 sample_idx += 2
                 current_pop_processed += 2
-                pbar.update(2)
+                
+                # Update progress bar
+                if accelerator.is_main_process:
+                    pbar.update(2)
+                    pbar.set_description(f"Epoch {epoch} | Pair {current_pop_processed//2}/{population_size//2} | Img {current_pop_processed}/{population_size}")
 
         pbar.close()
 
@@ -309,17 +316,24 @@ def train_sd3_eggroll(config) -> None:
              # 1. 평균 점수
              mean_fitness = all_fitnesses.mean().item()
              
-             # 2. 점수의 표준편차 (노이즈의 영향력 측정)
-             # 이 값이 0에 가까우면 Sigma가 너무 작거나, 프롬프트가 너무 쉬운 것임.
-             std_fitness = all_fitnesses.std().item()
+             # 2. [NEW] Pairwise Difference (순수 노이즈 영향력)
+             # 배열을 짝수/홀수 인덱스로 나눕니다.
+             # shape가 (N,) 이라고 가정합니다.
+             pos_scores = all_fitnesses[0::2] # 짝수 인덱스 (+Sigma)
+             neg_scores = all_fitnesses[1::2] # 홀수 인덱스 (-Sigma)
              
-             # 3. 최대/최소 점수 차이 (Max-Min Spread)
-             spread_fitness = (all_fitnesses.max() - all_fitnesses.min()).item()
+             # 두 점수 차이의 절대값 평균
+             # 이 값이 너무 크면 노이즈 과다, 0에 가까우면 노이즈 부족
+             noise_impact = torch.abs(pos_scores - neg_scores).mean().item()
+             
+             # 3. Pairwise Difference의 표준편차 (안정성 확인용)
+             # 모든 프롬프트에서 노이즈 영향이 균일한지 봅니다.
+             noise_impact_std = torch.abs(pos_scores - neg_scores).std().item()
 
              wandb.log({
                  "train/reward_avg": mean_fitness,
-                 "train/reward_std": std_fitness,     # 핵심 지표
-                 "train/reward_spread": spread_fitness,
+                 "train/noise_impact": noise_impact,
+                 "train/noise_impact_std": noise_impact_std,
                  "epoch": epoch,
              }, step=epoch)
 
