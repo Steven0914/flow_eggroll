@@ -80,7 +80,6 @@ def train_sd3_eggroll(config) -> None:
         print("="*40)
         print(f"EggRoll Sigma: {getattr(config, 'eggroll_sigma', 1e-3)}")
         print(f"Learning Rate: {getattr(config.train, 'learning_rate', 1e-4)}")
-        print(f"Weight Decay : {getattr(config.train, 'weight_decay', 1e-4)}")
         print(f"EggRoll Rank : {getattr(config, 'eggroll_rank', 4)}")
         
         batches_per_epoch = config.sample.num_batches_per_epoch
@@ -124,7 +123,6 @@ def train_sd3_eggroll(config) -> None:
     sigma = getattr(config, "eggroll_sigma", 1e-3)
     lr = getattr(config.train, "learning_rate", 1e-4)
     noise_reuse = getattr(config, "eggroll_noise_reuse", 1)
-    weight_decay = getattr(config.train, "weight_decay", 1e-4)
     
     # Initialize EggRoll (This replaces Linear layers with EggrollLinear)
     # Note: We pass the transformer model directly
@@ -135,8 +133,7 @@ def train_sd3_eggroll(config) -> None:
         lr=lr,
         group_size=2, # Set group_size=2 for Pairwise Normalization (Antithetic Sampling)
         noise_reuse=noise_reuse,
-        rank=lora_rank,
-        weight_decay=weight_decay
+        rank=lora_rank
     )
 
     # Collect trainable parameters (The weights of the replaced modules)

@@ -58,7 +58,6 @@ def pickscore_sd3_2gpu():
     config.sample.global_std = True
     config.sample.same_latent = False
     config.train.ema = True
-    config.train.weight_decay = 1e-4
 
     config.save_freq = 10 # epoch
     config.eval_freq = 5
@@ -103,7 +102,6 @@ def general_ocr_sd3_2gpu():
     config.sample.global_std = True
     config.sample.same_latent = False
     config.train.ema = True
-    config.train.weight_decay = 1e-4
 
     # A large num_epochs is intentionally set here. Training will be manually stopped once sufficient
     config.save_freq = 10 # epoch
@@ -150,7 +148,6 @@ def general_ocr_sd3_1gpu():
     config.sample.global_std = True
     config.sample.same_latent = False
     config.train.ema = True
-    config.train.weight_decay = 1e-4
 
     config.save_freq = 10 # epoch
     config.eval_freq = 5
@@ -195,7 +192,6 @@ def general_ocr_sd3_2gpu_test():
     config.sample.global_std = True
     config.sample.same_latent = False
     config.train.ema = True
-    config.train.weight_decay = 1e-4
 
     # A large num_epochs is intentionally set here. Training will be manually stopped once sufficient
     config.save_freq = 10 # epoch
