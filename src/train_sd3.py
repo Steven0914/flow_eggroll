@@ -342,7 +342,15 @@ def train_sd3_eggroll(config) -> None:
                  "epoch": epoch,
              }, step=epoch)
 
-        eggroll.step(all_fitnesses, all_iterinfos) # Updates base weights via standard optimizer inside
+        eggroll_metrics = eggroll.step(all_fitnesses, all_iterinfos) # Updates base weights via standard optimizer inside
+        
+        if config.use_wandb and accelerator.is_main_process:
+             wandb.log({
+                 "train/grad_norm": eggroll_metrics["grad_norm"],
+                 "train/update_param_ratio": eggroll_metrics["update_param_ratio"],
+                 "train/grad_cosine_sim": eggroll_metrics["grad_cosine_sim"],
+                 "train/winner_alignment": eggroll_metrics["winner_alignment"],
+             }, step=epoch)
         accelerator.wait_for_everyone()
         
         # Update EMA
