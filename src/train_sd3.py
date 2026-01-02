@@ -133,7 +133,11 @@ def train_sd3_eggroll(config) -> None:
         lr=lr,
         group_size=2, # Set group_size=2 for Pairwise Normalization (Antithetic Sampling)
         noise_reuse=noise_reuse,
-        rank=lora_rank
+        rank=lora_rank,
+        optimizer_cls=torch.optim.AdamW,
+        betas=(getattr(config.train, "adam_beta1", 0.9), getattr(config.train, "adam_beta2", 0.999)),
+        weight_decay=getattr(config.train, "adam_weight_decay", 1e-2),
+        eps=getattr(config.train, "adam_epsilon", 1e-8)
     )
 
     # Collect trainable parameters (The weights of the replaced modules)
