@@ -81,7 +81,7 @@ def train_sd3_eggroll(config) -> None:
         print(f"EggRoll Sigma: {getattr(config, 'eggroll_sigma', 1e-3)}")
         print(f"Learning Rate: {getattr(config.train, 'learning_rate', 1e-4)}")
         print(f"EggRoll Rank : {getattr(config, 'eggroll_rank', 4)}")
-        
+        print(f"Reward Fn    : {config.reward_fn}")
         batches_per_epoch = config.sample.num_batches_per_epoch
         population_size = batches_per_epoch * config.sample.train_batch_size
         print(f"Population/Epoch : {population_size} (Batches: {batches_per_epoch} x BS: {config.sample.train_batch_size})")
@@ -208,7 +208,9 @@ def train_sd3_eggroll(config) -> None:
         
         # Use tqdm for progress tracking
         # We process 2 samples per iteration (Antithetic), so total steps = population_size
-        pbar = tqdm(total=population_size, desc=f"Epoch {epoch} Progress", unit="img", disable=not accelerator.is_main_process)
+        # Display GLOBAL TOTAL in progress bar for clarity
+        global_population_size = population_size * accelerator.num_processes
+        pbar = tqdm(total=global_population_size, desc=f"Epoch {epoch} Progress", unit="img", disable=not accelerator.is_main_process)
         
         while current_pop_processed < population_size:
             try:
@@ -297,8 +299,14 @@ def train_sd3_eggroll(config) -> None:
                 
                 # Update progress bar
                 if accelerator.is_main_process:
-                    pbar.update(2)
-                    pbar.set_description(f"Epoch {epoch} | Pair {current_pop_processed//2}/{population_size//2} | Img {current_pop_processed}/{population_size}")
+                    # Scale local progress to global progress for display
+                    num_gpus = accelerator.num_processes
+                    global_processed = current_pop_processed * num_gpus
+                    global_total = population_size * num_gpus
+                    
+                    pbar.update(2 * num_gpus)
+                    pbar.set_description(f"Epoch {epoch} | Pair {global_processed//2}/{global_total//2} | Img {global_processed}/{global_total}")
+
 
         pbar.close()
 
@@ -387,6 +395,8 @@ def train_sd3_eggroll(config) -> None:
                      negative_prompts = [""] * len(prompts)
                      
                      # Simple inference
+                     generator = torch.Generator(device=device).manual_seed(42 + i)
+                     
                      images = pipeline(
                         prompt=prompts,
                         negative_prompt=negative_prompts,
@@ -395,6 +405,7 @@ def train_sd3_eggroll(config) -> None:
                         height=config.resolution,
                         width=config.resolution,
                         output_type="pt",
+                        generator=generator,
                      ).images
                  
                  # Compute rewards

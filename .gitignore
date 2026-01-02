@@ -12,5 +12,4 @@ wheels/
 wandb/
 logs/
 .venv/
-flow_grpo/
 
