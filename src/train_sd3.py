@@ -51,11 +51,12 @@ class TextPromptDataset(Dataset):
         metadatas = [e["metadata"] for e in examples]
         return prompts, metadatas
 
-def compute_centered_ranks(fitnesses):
+def compute_softmax_ranks(fitnesses, temperature=0.1):
     """
-    Transforms fitnesses into centered ranks [-0.5, 0.5].
-    This is a critical technique for ES to ensure constant gradient flow
-    regardless of the scale or magnitude of reward differences.
+    Transforms fitnesses into centered ranks, then applies softmax weighting.
+    temperature: Controls the "sharpness" of the weighting.
+                 - High T (>1.0): Uniform-like (Like simple averaging)
+                 - Low T (<0.2): Greedy (Focus heavily on top performers)
     """
     x = fitnesses.clone().detach()
     pop_size = x.numel()
@@ -64,13 +65,44 @@ def compute_centered_ranks(fitnesses):
     # double argsort gives us the rank of each element
     ranks = torch.argsort(torch.argsort(x)).float()
 
-    # 2. Normalize to [-0.5, 0.5]
-    # min rank (0) -> -0.5
-    # max rank (N-1) -> +0.5
-    ranks = ranks / (pop_size - 1) - 0.5
+    # 2. Normalize Ranks to [-0.5, 0.5]
+    centered_ranks = ranks / (pop_size - 1) - 0.5
     
-    return ranks
-
+    # 3. Softmax Weighting (Sharpening)
+    # We apply softmax to (rank / temperature).
+    # Since centered_ranks are in [-0.5, 0.5], strict softmax might be too skewed if T is very small.
+    # But that's the point.
+    
+    # Note: Softmax output sums to 1. 
+    # To keep gradient scale consistent with standard ES (which sums roughly to 1 effectively via averaging),
+    # we might need to scale it up by pop_size.
+    # Standard ES Update: 1/N * sum(noise * rank)
+    # Softmax Update: sum(noise * weight) where weight = exp/sum_exp
+    # To match magnitude: weight should be approx 1/N. so N * weight gives us the "relative leverage".
+    
+    weights = torch.softmax(centered_ranks / temperature, dim=0)
+    
+    # 4. Center the weights (Zero-Mean Assumption for Antithetic)
+    # For antithetic noise (+e, -e), we implicitly assume weights sum to something?
+    # Actually, for standard params update: theta_new = theta + lr * 1/(sigma*N) * sum(reward * noise)
+    # If reward is constant, sum(noise) -> 0. So centering is good but not strictly required if large N.
+    # However, centering ensures that if all rewards are equal, update is zero.
+    
+    weights = weights - weights.mean()
+    
+    # 5. Rescale to recover magnitude
+    # We want "average" weight to be roughly comparable to the rank scale [-0.5, 0.5]
+    # Current weights are approx [-1/N, 1/N] (centered).
+    # Let's scale by pop_size to make them order of [-1, 1].
+    weights = weights * pop_size
+    
+    # Finally scale it down a bit to match the previous [-0.5, 0.5] range roughly?
+    # Previous: -0.5 to 0.5. Range size = 1.
+    # New: -1 to 1 (approx). Range size = 2.
+    # Let's divide by 2 to keep LR tuning consistent.
+    weights = weights / 2.0
+    
+    return weights
 
 def train_sd3_eggroll(config) -> None:
     accelerator = Accelerator()
@@ -158,7 +190,7 @@ def train_sd3_eggroll(config) -> None:
         target_modules=target_modules,
         sigma=sigma,
         lr=lr,
-        group_size=2, # Set group_size=2 for Pairwise Normalization (Antithetic Sampling)
+        group_size=0, # Set group_size=0 for Global Normalization (Magnitude-aware updates)
         noise_reuse=noise_reuse,
         rank=lora_rank,
     )
@@ -363,10 +395,11 @@ def train_sd3_eggroll(config) -> None:
              noise_impact_std = torch.abs(pos_scores - neg_scores).std().item()
 
         
-        # Apply Rank-based Fitness Shaping
-        # This transforms raw scores (e.g. 0.842 vs 0.843) into robust ranks (-0.5 vs 0.5)
-        # providing constant gradient pressure to the optimizer.
-        shaped_fitnesses = compute_centered_ranks(all_fitnesses)
+        # Apply Rank-based Fitness Shaping with Temperature
+        # This transforms raw scores into robust ranks and then applies softmax sharpening
+        # providing aggressive yet stable gradient pressure.
+        temperature = getattr(config, "eggroll_temperature", 0.1)
+        shaped_fitnesses = compute_softmax_ranks(all_fitnesses, temperature=temperature)
         
         eggroll_metrics = eggroll.step(shaped_fitnesses, all_iterinfos) # Updates base weights via standard optimizer inside
         

@@ -25,10 +25,11 @@ def compressibility():
     config.reward_fn = {"jpeg_compressibility": 1}
     config.per_prompt_stat_tracking = True
     
-    config.train.learning_rate = 1e-4
+    config.train.learning_rate = 5e-3
 
     # eggroll
     config.eggroll_sigma = 1e-2
+    config.eggroll_temperature = 0.5
 
     return config
 
@@ -43,7 +44,7 @@ def pickscore_sd3_2gpu():
 
     # sd3.5 medium
     config.pretrained.model = "stabilityai/stable-diffusion-3.5-medium"
-    config.sample.num_steps = 10
+    config.sample.num_steps = 40
     config.sample.eval_num_steps = 40
     config.sample.guidance_scale = 4.5
 
@@ -51,7 +52,7 @@ def pickscore_sd3_2gpu():
     config.sample.train_batch_size = 2
 
     # Total population size
-    config.population_size = 1024
+    config.population_size = 256
     
     # Calculate batches per epoch
     total_batch_size_per_step = gpu_number * config.sample.train_batch_size
@@ -73,9 +74,64 @@ def pickscore_sd3_2gpu():
 
     # eggroll
     config.eggroll_sigma = 1e-2
-    config.save_freq = 20 # epoch
-    config.eval_freq = 5
+    config.save_freq = 100 # epoch
+    config.eval_freq = 20
     
+    config.save_dir = 'logs/pickscore/sd3.5-M'
+    config.reward_fn = {
+        "pickscore": 1.0,
+    }
+
+    config.eggroll_temperature = 0.5
+    
+    config.prompt_fn = "general_ocr"
+
+    config.per_prompt_stat_tracking = True
+    return config
+
+
+def pickscore_sd3():
+    gpu_number=1
+    config = compressibility()
+    config.use_wandb = True
+
+    config.dataset = os.path.join(os.getcwd(), "flow_grpo/dataset/pickscore")
+
+    # sd3.5 medium
+    config.pretrained.model = "stabilityai/stable-diffusion-3.5-medium"
+    config.sample.num_steps = 20
+    config.sample.eval_num_steps = 40
+    config.sample.guidance_scale = 4.5
+
+    config.resolution = 512
+    config.sample.train_batch_size = 2
+
+    # Total population size
+    config.population_size = 256
+    
+    # Calculate batches per epoch
+    total_batch_size_per_step = gpu_number * config.sample.train_batch_size
+    config.sample.num_batches_per_epoch = config.population_size // total_batch_size_per_step
+    
+    assert config.population_size % total_batch_size_per_step == 0, f"Population size {config.population_size} must be divisible by total batch size ({total_batch_size_per_step})"
+    assert config.sample.num_batches_per_epoch % 2 == 0, "Please ensure num_batches_per_epoch is even."
+    
+
+    config.train.batch_size = config.sample.train_batch_size
+    config.train.gradient_accumulation_steps = config.sample.num_batches_per_epoch//2
+    config.train.num_inner_epochs = 1
+    config.train.timestep_fraction = 0.99
+    config.train.beta = 0.01
+    config.sample.global_std = True
+    config.sample.same_latent = False
+    config.train.ema = True
+    config.sample.test_batch_size = 2
+
+    # eggroll
+    config.eggroll_sigma = 1e-2
+    config.save_freq = 100 # epoch
+    config.eval_freq = 5
+    config.eggroll_temperature = 0.5
     config.save_dir = 'logs/pickscore/sd3.5-M'
     config.reward_fn = {
         "pickscore": 1.0,
@@ -85,7 +141,6 @@ def pickscore_sd3_2gpu():
 
     config.per_prompt_stat_tracking = True
     return config
-
 
 
 def general_ocr_sd3_2gpu():
