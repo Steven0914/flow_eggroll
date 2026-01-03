@@ -51,6 +51,26 @@ class TextPromptDataset(Dataset):
         metadatas = [e["metadata"] for e in examples]
         return prompts, metadatas
 
+def compute_centered_ranks(fitnesses):
+    """
+    Transforms fitnesses into centered ranks [-0.5, 0.5].
+    This is a critical technique for ES to ensure constant gradient flow
+    regardless of the scale or magnitude of reward differences.
+    """
+    x = fitnesses.clone().detach()
+    pop_size = x.numel()
+
+    # 1. Calculate Ranks (0 to N-1)
+    # double argsort gives us the rank of each element
+    ranks = torch.argsort(torch.argsort(x)).float()
+
+    # 2. Normalize to [-0.5, 0.5]
+    # min rank (0) -> -0.5
+    # max rank (N-1) -> +0.5
+    ranks = ranks / (pop_size - 1) - 0.5
+    
+    return ranks
+
 
 def train_sd3_eggroll(config) -> None:
     accelerator = Accelerator()
@@ -82,9 +102,16 @@ def train_sd3_eggroll(config) -> None:
         print(f"Learning Rate: {getattr(config.train, 'learning_rate', 1e-4)}")
         print(f"EggRoll Rank : {getattr(config, 'eggroll_rank', 4)}")
         print(f"Reward Fn    : {config.reward_fn}")
+        
+        # Population Calculation Log
         batches_per_epoch = config.sample.num_batches_per_epoch
-        population_size = batches_per_epoch * config.sample.train_batch_size
-        print(f"Population/Epoch : {population_size} (Batches: {batches_per_epoch} x BS: {config.sample.train_batch_size})")
+        per_gpu_pop = batches_per_epoch * config.sample.train_batch_size
+        num_gpus = accelerator.num_processes
+        total_pop = per_gpu_pop * num_gpus
+        
+        print("-" * 40)
+        print(f"Total Population : {total_pop} ({num_gpus} GPUs x {per_gpu_pop} per GPU)")
+        print(f"Per-GPU Details  : {per_gpu_pop} samples (Batches: {batches_per_epoch} x BS: {config.sample.train_batch_size})")
         print("="*40)
     
     # Reproducibility
@@ -134,10 +161,6 @@ def train_sd3_eggroll(config) -> None:
         group_size=2, # Set group_size=2 for Pairwise Normalization (Antithetic Sampling)
         noise_reuse=noise_reuse,
         rank=lora_rank,
-        optimizer_cls=torch.optim.AdamW,
-        betas=(getattr(config.train, "adam_beta1", 0.9), getattr(config.train, "adam_beta2", 0.999)),
-        weight_decay=getattr(config.train, "adam_weight_decay", 1e-2),
-        eps=getattr(config.train, "adam_epsilon", 1e-8)
     )
 
     # Collect trainable parameters (The weights of the replaced modules)
@@ -339,22 +362,27 @@ def train_sd3_eggroll(config) -> None:
              # 모든 프롬프트에서 노이즈 영향이 균일한지 봅니다.
              noise_impact_std = torch.abs(pos_scores - neg_scores).std().item()
 
-             wandb.log({
+        
+        # Apply Rank-based Fitness Shaping
+        # This transforms raw scores (e.g. 0.842 vs 0.843) into robust ranks (-0.5 vs 0.5)
+        # providing constant gradient pressure to the optimizer.
+        shaped_fitnesses = compute_centered_ranks(all_fitnesses)
+        
+        eggroll_metrics = eggroll.step(shaped_fitnesses, all_iterinfos) # Updates base weights via standard optimizer inside
+        
+        if config.use_wandb and accelerator.is_main_process:
+             # Combine original reward metrics and EggRoll training metrics
+             log_data = {
                  "train/reward_avg": mean_fitness,
                  "train/noise_impact": noise_impact,
                  "train/noise_impact_std": noise_impact_std,
-                 "epoch": epoch,
-             }, step=epoch)
-
-        eggroll_metrics = eggroll.step(all_fitnesses, all_iterinfos) # Updates base weights via standard optimizer inside
-        
-        if config.use_wandb and accelerator.is_main_process:
-             wandb.log({
                  "train/grad_norm": eggroll_metrics["grad_norm"],
                  "train/update_param_ratio": eggroll_metrics["update_param_ratio"],
                  "train/grad_cosine_sim": eggroll_metrics["grad_cosine_sim"],
                  "train/winner_alignment": eggroll_metrics["winner_alignment"],
-             }, step=epoch)
+                 "epoch": epoch,
+             }
+             wandb.log(log_data, step=epoch)
         accelerator.wait_for_everyone()
         
         # Update EMA
